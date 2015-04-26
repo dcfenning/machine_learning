@@ -1,0 +1,139 @@
+---
+title: 'Weight Lifiting Exercises: Prediction based modelling'
+author: "DCFenning"
+date: "Friday, April 24, 2015"
+output: html_document
+---
+
+##EXECUTIVE SUMMARY
+This project uses data collected from a research study to investigate how well a weight lifting activity was performed using on-body sensors. (see http://groupware.les.inf.puc-rio.br/har).  The project aims to develop a model that is able to predict the manner in which the study participants performed their exercise (i.e. correctly or incorrectly).  The data was cleaned, explored and prepared.  A sub training and test data set was used to identify the most suitable model.  Decision Tree algortihms were developed with and without Principle Components Analysis. Linear Discriminant Analysis provided a model that was estimate to be 70% accurate, however the final model selected was developed from Random Forests with an out of sample error estiamte to be 0.55%.  The final model successfully predicted all 20 test cases.
+
+###Weight lifting correctly
+The prediction model aims to predict the manner in which participants successfully performed their exercise.  There are five classes of outcomes:
+Class A: Performed according to the specification given (Correctly performed exercise)
+Class B: Throwing elbows to the front (Incorrectly performed exercise)
+Class C: Lifting the dumbell only halfway (Incorrectly performed exercise)
+Class D: Lowering the dumbell only halfway (Incorrectly performed exercise)
+Class E: Throwing the hips to the front (Incorrectly performed exercise)
+Data was collected from 6 subjects wearing accelerometers on the belt, forearm, arm, and dumbell
+
+###Data Cleaning and Exploration
+Test and training data were downloaded and loaded.  The data required cleaning to remove variables from both the training and test sets of data that were not required for the study.  In the training data set the outcome variable 'classe' was converted to a factor variable.  A quick review of the data using the summary function revealed that all variables were numeric and did not require further conversion.  Two potential outliers were identified from box plots of the data in observations 5373 and 9274.  These observations were removed.  The training set contained a total of 19620 observations and 52 potential variables.
+
+```{r echo = FALSE, warning=FALSE}
+setwd("~/Coursera/Practical Machine Learning/Project submission/machine_learning")
+
+##Get and clean training data
+train_raw <- read.csv("./pml-training.csv", header = TRUE, stringsAsFactors=FALSE, na.strings="NA")
+
+##Remove columns not required for model
+train <- train_raw[,-c(1:7,12:36,50:59,69:83,87:101,103:112,125:139,141:150)]
+train$classe <- as.factor(train$classe)
+
+##Get and clean testing data
+test_raw <- read.csv("./pml-testing.csv", header = TRUE, stringsAsFactors=FALSE, na.strings="NA")
+
+##Remove columns not required for model
+test <- test_raw[,-c(1:7,12:36,50:59,69:83,87:101,103:112,125:139,141:150)]
+
+##Data Exploration
+dim(train)
+dim(test)
+```
+
+```{r echo = FALSE, warning=FALSE}
+##Data visualisation
+##Example box plot of outlier
+boxplot(x = as.list(as.data.frame(train[,c(12,25,38,51)])), main = "Example of outlier found in magnet_dumbell_y") ##shows potential outlier in data point magnet dumbell_y in 9274
+
+##Remove observations 9274 and 5373 as outliers in the data
+train <- train[-c(5373,9274),]
+```
+
+###Cross validation
+In order to estimate the out of sample error rate and for cross validation purposes it was decided to further split the training set into a sub training data set and a probe/subtest training.  As there are a large number of observations (19620), it was decided to split up 70% of the training set into a sub training data set with the remaining data as the probe test set.  The function createDataPartition from the caret package was used to create the two sub training and testing datasets.  
+
+```{r echo = FALSE, warning=FALSE}
+##Create subset of training and test data
+library(caret)
+set.seed(325)
+inTrain <- createDataPartition(y=train$classe, p=0.7, list=FALSE)
+subtrain <- train[inTrain,]
+subtest <- train[-inTrain,]
+##Set traincontrol for 4 fold cross validation 
+train_control <- trainControl(method="cv", number=4)
+```
+
+##Model Building and feature selection
+Decision trees are inherently useful in idenitfying the most useful features to be selected for a model.  The Decision Tree used four key features, roll belt, pitch forearm, magnet dumbell y and roll forearm as features for predicting class of outcome, but had an accuracy of only 49% and did not do very well at predicting class D exercises.  The confusion matrix for the decision tree:  
+
+```{r echo = FALSE, warning=FALSE}
+##Model building
+
+##Decision Tree (DT)
+ModFitDT <- train(classe ~ .,method="rpart",trControl=train_control,data=subtrain)
+predDT <- predict(ModFitDT, newdata=subtest)
+confusionMatrix(predDT,subtest$classe)
+```
+
+The final decision tree model shows the important features for prediction.
+
+```{r echo =FALSE, warning=FALSE}
+library(rattle)
+fancyRpartPlot(ModFitDT$finalModel)
+```
+
+As there are 52 potential predictors with some likely to be highly correlated due the nature of the data collected by sensors,  Principal Components Analysis to select features was used.  Initially identifying all features that were highly correlated helped to identify the potential number of components to select for Principle Components Analysis, from this analysis 29 components was chosen to convert the subtraining data to Principle Components.  A Decision tree was developed with these components, however the accuracy significantly reduced to 24% and the model was unable to predict class C exercises very well.  The confusion matrix:
+
+```{r echo = FALSE, warning=FALSE}
+##Checking for highly correlated features
+correlationMatrix <- cor(subtrain[,-53])
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.5)  ##29 highly correlated variables
+
+##PCA on sub training data
+preProc <- preProcess(subtrain[,-53],method="pca",pcaComp=29)
+trainPC <- predict(preProc,subtrain[,-53])
+
+##PCA on test (probe) data
+preProcTest <- preProcess(subtest[,-53],method="pca", pcaComp=29)
+testPC <- predict(preProcTest,subtest[,-53])
+
+##Decision Tree with Principle Components
+ModFitDTPC <- train(subtrain$classe ~ .,method="rpart",trControl=train_control, data=trainPC)
+predDTPC <- predict(ModFitDTPC, newdata=testPC)
+confusionMatrix(predDTPC,subtest$classe)
+```
+
+Linear Discriminant Analysis was used, although closely related to Principal Components Analysis, linear discriminant analysis attempts to model the differences between the classes of data.  This model produced a higher accuracy of 70%. The confusion matrix is shown below:
+
+```{r echo = FALSE, warning=FALSE}
+##Linear Discriminant Analysis
+ModFitLda = train(subtrain$classe ~.,data=subtrain,method="lda")
+predLda <- predict(ModFitLda,subtest)
+confusionMatrix(predLda,subtest$classe)
+
+##Gradient Boosting with trees - algorithm took too long to run
+##ModFitGbm <- train(subtrain$classe ~.,data=subtrain,method="gbm", verbose=FALSE)
+
+```
+
+Boosting was also considered in order to potentially create stronger predictors through weighting, gradient boosting with trees was selected and this model took too long to run on my tiny Intel core M processor, so I gave up with this model.
+
+Finally, random forests was also considered which adds an additional layer of randomness to multiple decision trees from the training dataset.  This produced a model that was 99.4% accurate, correctly predicting class E outcomes with a suspiciously accurate 100%.  This may indicate that the model may potentially be overfitted. The confusion matrix is shown below. 
+
+```{r echo = FALSE, warning=FALSE}
+##Random Forests
+library(randomForest)
+modelFitRF <- randomForest(subtrain[,-53], subtrain$classe)
+predRF <- predict(modelFitRF,subtest)
+confusionMatrix(predRF,subtest$classe)
+```
+
+##Final Model Selection and accuracy
+In selecting the final model the following attributes of each were considered:interpretability, accuracy, simplicity, fast to train and test and scalability. The random forest modelFitRF was considered to be the most effective and efficient across these criteria. The estimate of out of sample error is 0.55% (1- accuracy of the prediction algorithm against subtest data).  
+
+##The predictions
+The final predictions using the selected random forest model against the test data are:
+```{r echo=FALSE, warning=FALSE}
+Fpred <- predict(modelFitRF, test)
+Fpred
